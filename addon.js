@@ -3,6 +3,7 @@ const cors = require('cors');
 const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const fetch = require('node-fetch');
 
+// These public URLs are passed in automatically by the start.sh script.
 const PUBLIC_ADDON_URL = process.env.PUBLIC_ADDON_URL;
 const PUBLIC_VIDEO_URL = process.env.PUBLIC_VIDEO_URL;
 
@@ -48,18 +49,15 @@ const streamHandler = async (args) => {
                 return Promise.resolve({ streams: [] });
             }
             
-            // Map over the curated list of torrents
             const streams = torrents.map(torrent => {
-                const streamUrl = `${PEERFLIX_BACKEND_URL}/stream/${torrent.infoHash}`;
-                // NEW: Create a clean, informative title
+                // --- DEFINITIVE FIX ---
+                // The URL given to Stremio is now a PUBLIC endpoint on the addon server itself.
+                const playUrl = `${PUBLIC_ADDON_URL}/play/${torrent.infoHash}`;
                 const displayTitle = `[${torrent.quality}] [S: ${torrent.seeders}] 🎬\n${torrent.name}`;
                 return {
                     name: `Boxy (Public)`,
                     title: displayTitle,
-                    url: streamUrl,
-                    behaviorHints: {
-                        proxyHeaders: { "location": PUBLIC_VIDEO_URL }
-                    }
+                    url: playUrl, // This URL is clean, public, and secure.
                 };
             });
 
@@ -71,10 +69,10 @@ const streamHandler = async (args) => {
 };
 
 const manifest = {
-    id: 'com.boxy.addon.public.quality',
-    version: '12.0.0',
-    name: 'Boxy Peerflix (By Quality)',
-    description: 'Provides the best 4K, 1080p, and 720p streams, tunneled via Cloudflare.',
+    id: 'com.boxy.addon.public.final',
+    version: '13.0.0', // Final public version
+    name: 'Boxy Peerflix (Public Final)',
+    description: 'Provides quality-based streams, tunneled securely for all devices.',
     resources: ['stream'],
     types: ['movie', 'series'],
     idPrefixes: ['tt'],
@@ -85,18 +83,25 @@ const builder = new addonBuilder(manifest);
 builder.defineStreamHandler(streamHandler);
 const app = express();
 app.use(cors());
-app.use((req, res, next) => {
-    if (req.path.startsWith('/stream/')) {
-        if (res.get('location')) {
-            return res.redirect(307, res.get('location'));
-        }
-    }
-    next();
-}, getRouter(builder.getInterface()));
+
+// --- NEW: Middleman Route ---
+// This new route handles the handoff from Stremio to the video server.
+app.get('/play/:infoHash', async (req, res) => {
+    const { infoHash } = req.params;
+    console.log(`[Addon] Received play request for ${infoHash}, triggering backend...`);
+    
+    // 1. Tell the backend to start the download (internally).
+    await fetch(`${PEERFLIX_BACKEND_URL}/stream/${infoHash}`);
+    
+    // 2. Immediately redirect the player to the public video tunnel.
+    res.redirect(307, PUBLIC_VIDEO_URL);
+});
+
+app.use(getRouter(builder.getInterface()));
 
 app.listen(ADDON_PORT, '0.0.0.0', () => {
     console.log('');
-    console.log('--- ✅ Boxy Quality-Based Addon is Running ---');
+    console.log('--- ✅ Boxy Definitive Addon is Running ---');
     console.log('Install this addon on ANY device (iOS, Web, TV) using your public URL:');
     console.log(PUBLIC_ADDON_URL);
     console.log('--------------------------------------------------');
