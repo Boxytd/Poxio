@@ -3,7 +3,6 @@ const cors = require('cors');
 const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const fetch = require('node-fetch');
 
-// These public URLs are passed in automatically by the start.sh script.
 const PUBLIC_ADDON_URL = process.env.PUBLIC_ADDON_URL;
 const PUBLIC_VIDEO_URL = process.env.PUBLIC_VIDEO_URL;
 
@@ -25,7 +24,6 @@ const streamHandler = async (args) => {
             const tmdbResponse = await fetch(tmdbUrl);
             const tmdbData = await tmdbResponse.json();
             let media, title, year;
-
             if (args.type === 'movie' && tmdbData.movie_results.length > 0) {
                 media = tmdbData.movie_results[0];
                 title = media.title;
@@ -44,33 +42,23 @@ const streamHandler = async (args) => {
                 body: JSON.stringify({ title, year, season, episode })
             });
             const torrents = await searchResponse.json();
+            if (!torrents || torrents.length === 0) { return Promise.resolve({ streams: [] }); }
 
-            if (!torrents || torrents.length === 0) {
-                return Promise.resolve({ streams: [] });
-            }
-            
             const streams = torrents.map(torrent => {
-                // --- DEFINITIVE FIX ---
-                // The URL given to Stremio is now a PUBLIC endpoint on the addon server itself.
                 const playUrl = `${PUBLIC_ADDON_URL}/play/${torrent.infoHash}`;
                 const displayTitle = `[${torrent.quality}] [S: ${torrent.seeders}] 🎬\n${torrent.name}`;
-                return {
-                    name: `Boxy (Public)`,
-                    title: displayTitle,
-                    url: playUrl, // This URL is clean, public, and secure.
-                };
+                return { name: `Boxy (Public)`, title: displayTitle, url: playUrl };
             });
 
             return Promise.resolve({ streams });
-
         } catch (error) { console.error(`[Addon] Error: ${error.message}`); return Promise.resolve({ streams: [] }); }
     }
     return Promise.resolve({ streams: [] });
 };
 
 const manifest = {
-    id: 'com.boxy.addon.public.final',
-    version: '13.0.0', // Final public version
+    id: 'com.boxy.addon.public.final.v2',
+    version: '14.0.0', // Race condition fixed
     name: 'Boxy Peerflix (Public Final)',
     description: 'Provides quality-based streams, tunneled securely for all devices.',
     resources: ['stream'],
@@ -84,17 +72,35 @@ builder.defineStreamHandler(streamHandler);
 const app = express();
 app.use(cors());
 
-// --- NEW: Middleman Route ---
-// This new route handles the handoff from Stremio to the video server.
+// --- MODIFIED: Middleman Route with "Wait for Ready" Logic ---
 app.get('/play/:infoHash', async (req, res) => {
     const { infoHash } = req.params;
     console.log(`[Addon] Received play request for ${infoHash}, triggering backend...`);
-    
-    // 1. Tell the backend to start the download (internally).
-    await fetch(`${PEERFLIX_BACKEND_URL}/stream/${infoHash}`);
-    
-    // 2. Immediately redirect the player to the public video tunnel.
-    res.redirect(307, PUBLIC_VIDEO_URL);
+
+    // Use a function that retries until the backend is ready or times out
+    const waitForReady = async (retries = 15) => {
+        if (retries === 0) throw new Error('Backend did not become ready in time.');
+        try {
+            const response = await fetch(`${PEERFLIX_BACKEND_URL}/stream/${infoHash}`);
+            const data = await response.json();
+            if (data.status === 'ready') {
+                return true;
+            }
+        } catch (e) { /* Ignore connection errors while waiting */ }
+        
+        console.log(`[Addon] Waiting for backend... (${retries} retries left)`);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+        return waitForReady(retries - 1);
+    };
+
+    try {
+        await waitForReady();
+        console.log('[Addon] Backend is ready! Redirecting player.');
+        res.redirect(307, PUBLIC_VIDEO_URL);
+    } catch (error) {
+        console.error(`[Addon] Error waiting for backend: ${error.message}`);
+        res.status(504).send('Server timed out waiting for the stream to become ready.');
+    }
 });
 
 app.use(getRouter(builder.getInterface()));
