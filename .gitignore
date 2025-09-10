@@ -1,0 +1,4 @@
+Ignore Node.js dependency folder
+node_modules
+Ignore temporary log files created by the start script
+*.log
