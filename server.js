@@ -3,11 +3,15 @@ const fetch = require('node-fetch');
 const peerflix = require('peerflix');
 const cors = require('cors');
 const path = require('path');
+const os = require('os'); // Required to find the home directory
 
 const app = express();
 const BACKEND_PORT = 8000;
 const PEERFLIX_PORT = 8888;
 let engine = null;
+
+// --- DEFINITIVE FIX: Define a dedicated folder for temporary downloads ---
+const DOWNLOAD_PATH = path.join(os.homedir(), 'Poxio', 'temp_downloads');
 
 // --- Video Streaming Server (No Change) ---
 const videoServer = express();
@@ -31,52 +35,35 @@ videoServer.get('/', (req, res) => {
 });
 videoServer.listen(PEERFLIX_PORT, '0.0.0.0', () => { console.log(`[Media Server] Video server is running on port ${PEERFLIX_PORT}.`); });
 
-// --- Control Server (New Quality-Based Logic) ---
+// --- Control Server ---
 app.use(cors());
 app.use(express.json());
 
 app.post('/search', async (req, res) => {
     const { title, year, season, episode } = req.body;
     if (!title) return res.status(400).json({ error: 'Title is required' });
-
     let searchQuery = (season && episode) ? `${title} S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}` : `${title} ${year}`;
-    console.log(`[Backend] Quality search for: ${searchQuery}`);
-
+    console.log(`[Backend] Searching for: ${searchQuery}`);
     try {
         const searchUrl = `https://apibay.org/q.php?q=${encodeURIComponent(searchQuery)}&cat=200`;
         const searchResponse = await fetch(searchUrl);
         const torrents = await searchResponse.json();
 
-        if (!torrents || torrents.length === 0 || torrents[0].name === 'No results returned') {
-            return res.json([]);
-        }
+        if (!torrents || torrents.length === 0 || torrents[0].name === 'No results returned') { return res.json([]); }
 
-        // --- NEW: Find the best torrent for each quality ---
-        let best = { '4K': null, '1080p': null, '720p': null };
+        const qualityMap = { '4K': null, '1080p': null, '720p': null };
+        torrents.forEach(t => {
+            const name = t.name.toLowerCase();
+            if ((name.includes('2160p') || name.includes('4k')) && !qualityMap['4K']) qualityMap['4K'] = t;
+            else if (name.includes('1080p') && !qualityMap['1080p']) qualityMap['1080p'] = t;
+            else if (name.includes('720p') && !qualityMap['720p']) qualityMap['720p'] = t;
+        });
 
-        for (const torrent of torrents) {
-            const name = torrent.name.toLowerCase();
-            const seeders = Number(torrent.seeders);
-            let quality = null;
+        const results = Object.keys(qualityMap)
+            .filter(q => qualityMap[q])
+            .map(q => ({ name: qualityMap[q].name, seeders: qualityMap[q].seeders, infoHash: qualityMap[q].info_hash, quality: q }));
 
-            if (name.includes('2160p') || name.includes('4k')) quality = '4K';
-            else if (name.includes('1080p')) quality = '1080p';
-            else if (name.includes('720p')) quality = '720p';
-
-            if (quality && (!best[quality] || seeders > best[quality].seeders)) {
-                best[quality] = {
-                    name: torrent.name,
-                    seeders: seeders,
-                    infoHash: torrent.info_hash,
-                    quality: quality // Add quality property
-                };
-            }
-        }
-
-        // Filter out null results and send the curated list
-        const results = Object.values(best).filter(t => t !== null);
         res.json(results);
-
     } catch (error) {
         console.error('[Backend] Error in /search endpoint:', error);
         res.status(500).json({ error: 'An internal server error occurred.' });
@@ -94,9 +81,13 @@ app.get('/stream/:infoHash', (req, res) => {
 
     const magnetLink = `magnet:?xt=urn:btih:${infoHash}`;
     console.log(`[Backend] Starting stream for info hash: ${infoHash}`);
-    engine = peerflix(magnetLink, {});
-    
-    // We don't wait for 'ready'. We immediately confirm so the addon can proceed.
+
+    // --- DEFINITIVE FIX: Tell peerflix to use our dedicated temp folder ---
+    engine = peerflix(magnetLink, { uploads: 0, path: DOWNLOAD_PATH });
+
+    engine.on('ready', () => { console.log('[Backend] Peerflix engine is ready.'); });
+    engine.on('error', (err) => { console.error(`[Backend] Peerflix engine error: ${err.message}`); });
+
     res.json({ message: 'Stream engine initiated.' });
 });
 
