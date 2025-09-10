@@ -57,8 +57,8 @@ const streamHandler = async (args) => {
 };
 
 const manifest = {
-    id: 'com.boxy.addon.public.final.v2',
-    version: '14.0.0', // Race condition fixed
+    id: 'com.boxy.addon.public.final.v3',
+    version: '15.0.0', // Long-polling fix
     name: 'Boxy Peerflix (Public Final)',
     description: 'Provides quality-based streams, tunneled securely for all devices.',
     resources: ['stream'],
@@ -72,33 +72,33 @@ builder.defineStreamHandler(streamHandler);
 const app = express();
 app.use(cors());
 
-// --- MODIFIED: Middleman Route with "Wait for Ready" Logic ---
+// --- DEFINITIVE FIX: Middleman Route with Long-Polling ---
 app.get('/play/:infoHash', async (req, res) => {
     const { infoHash } = req.params;
-    console.log(`[Addon] Received play request for ${infoHash}, triggering backend...`);
-
-    // Use a function that retries until the backend is ready or times out
-    const waitForReady = async (retries = 15) => {
-        if (retries === 0) throw new Error('Backend did not become ready in time.');
-        try {
-            const response = await fetch(`${PEERFLIX_BACKEND_URL}/stream/${infoHash}`);
-            const data = await response.json();
-            if (data.status === 'ready') {
-                return true;
-            }
-        } catch (e) { /* Ignore connection errors while waiting */ }
-        
-        console.log(`[Addon] Waiting for backend... (${retries} retries left)`);
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
-        return waitForReady(retries - 1);
-    };
+    console.log(`[Addon] Received play request for ${infoHash}, waiting for backend confirmation...`);
 
     try {
-        await waitForReady();
-        console.log('[Addon] Backend is ready! Redirecting player.');
-        res.redirect(307, PUBLIC_VIDEO_URL);
+        // This makes ONE call and waits for the backend to respond when it's ready.
+        // We add a timeout of 30 seconds to prevent it from waiting forever.
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30-second timeout
+
+        const response = await fetch(`${PEERFLIX_BACKEND_URL}/start-and-wait/${infoHash}`, {
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+
+        const data = await response.json();
+
+        if (data.status === 'ready') {
+            console.log('[Addon] Backend is ready! Redirecting player.');
+            res.redirect(307, PUBLIC_VIDEO_URL);
+        } else {
+            throw new Error('Backend responded with an unexpected status.');
+        }
     } catch (error) {
-        console.error(`[Addon] Error waiting for backend: ${error.message}`);
+        console.error(`[Addon] Error waiting for backend: ${error.name === 'AbortError' ? 'Request timed out' : error.message}`);
         res.status(504).send('Server timed out waiting for the stream to become ready.');
     }
 });
