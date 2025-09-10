@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- Boxy Peerflix Server Automated Installer ---
+# --- Boxy Peerflix Server Automated Installer (v1.1) ---
 
 echo "--- Installing Dependencies for Boxy Peerflix Server ---"
 echo "This may take several minutes..."
@@ -17,6 +17,9 @@ apt-get install -f -y > /dev/null
 # Step 3: Install Node.js project dependencies
 echo "Installing Node.js packages (this is the longest step)..."
 npm install --no-fund --no-audit
+
+# Step 4: Make the start script executable (Permission Fix)
+chmod +x start.sh
 
 echo ""
 echo "✅ --- Installation Complete! --- ✅"
