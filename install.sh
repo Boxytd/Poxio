@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- Boxy Peerflix Server Automated Installer (v1.1) ---
+# --- Boxy Peerflix Server Automated Installer (v1.2 - Lean Edition) ---
 
 echo "--- Installing Dependencies for Boxy Peerflix Server ---"
 echo "This may take several minutes..."
@@ -18,13 +18,23 @@ apt-get install -f -y > /dev/null
 echo "Installing Node.js packages (this is the longest step)..."
 npm install --no-fund --no-audit
 
-# Step 4: Make the start script executable (Permission Fix)
+# Step 4: Make the start script executable
 chmod +x start.sh
 
+# --- NEW: Step 5: Run Cleanup to Reduce Final Storage Size ---
+echo "Running cleanup to reduce storage footprint..."
+# Clean the npm cache (frees up the most space)
+npm cache clean --force > /dev/null
+# Clean the apt cache (frees up installer files)
+apt-get clean > /dev/null
+# Remove the cloudflared installer package
+rm -f cloudflared.deb
+
 echo ""
-echo "✅ --- Installation Complete! --- ✅"
+echo "✅ --- Lean Installation Complete! --- ✅"
 echo ""
-echo "You are all set. To start the server, run the following command from this directory:"
+echo "The final installation size has been significantly reduced."
+echo "To start the server, run the following command from this directory:"
 echo ""
 echo "   ./start.sh"
 echo ""
