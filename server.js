@@ -3,20 +3,21 @@ const fetch = require('node-fetch');
 const peerflix = require('peerflix');
 const cors = require('cors');
 const path = require('path');
-const os = require('os'); // Required to find the home directory
+const os = require('os');
 
 const app = express();
 const BACKEND_PORT = 8000;
 const PEERFLIX_PORT = 8888;
 let engine = null;
+let isReady = false; // --- NEW: Add a flag to track if the stream is ready ---
 
-// --- DEFINITIVE FIX: Define a dedicated folder for temporary downloads ---
 const DOWNLOAD_PATH = path.join(os.homedir(), 'Poxio', 'temp_downloads');
 
-// --- Video Streaming Server (No Change) ---
 const videoServer = express();
 videoServer.get('/', (req, res) => {
-    if (!engine || !engine.files.length) { return res.status(404).send('Stream not ready.'); }
+    if (!engine || !engine.files.length || !isReady) { // Check the ready flag
+        return res.status(503).send('Stream not ready yet. Please try again in a moment.');
+    }
     const file = engine.files.reduce((a, b) => (a.length > b.length ? a : b));
     const total = file.length;
     console.log(`[Media Server] Streaming file: ${file.name}`);
@@ -35,7 +36,6 @@ videoServer.get('/', (req, res) => {
 });
 videoServer.listen(PEERFLIX_PORT, '0.0.0.0', () => { console.log(`[Media Server] Video server is running on port ${PEERFLIX_PORT}.`); });
 
-// --- Control Server ---
 app.use(cors());
 app.use(express.json());
 
@@ -48,9 +48,7 @@ app.post('/search', async (req, res) => {
         const searchUrl = `https://apibay.org/q.php?q=${encodeURIComponent(searchQuery)}&cat=200`;
         const searchResponse = await fetch(searchUrl);
         const torrents = await searchResponse.json();
-
         if (!torrents || torrents.length === 0 || torrents[0].name === 'No results returned') { return res.json([]); }
-
         const qualityMap = { '4K': null, '1080p': null, '720p': null };
         torrents.forEach(t => {
             const name = t.name.toLowerCase();
@@ -58,37 +56,29 @@ app.post('/search', async (req, res) => {
             else if (name.includes('1080p') && !qualityMap['1080p']) qualityMap['1080p'] = t;
             else if (name.includes('720p') && !qualityMap['720p']) qualityMap['720p'] = t;
         });
-
-        const results = Object.keys(qualityMap)
-            .filter(q => qualityMap[q])
-            .map(q => ({ name: qualityMap[q].name, seeders: qualityMap[q].seeders, infoHash: qualityMap[q].info_hash, quality: q }));
-
+        const results = Object.keys(qualityMap).filter(q => qualityMap[q]).map(q => ({ name: qualityMap[q].name, seeders: qualityMap[q].seeders, infoHash: qualityMap[q].info_hash, quality: q }));
         res.json(results);
-    } catch (error) {
-        console.error('[Backend] Error in /search endpoint:', error);
-        res.status(500).json({ error: 'An internal server error occurred.' });
-    }
+    } catch (error) { console.error('[Backend] Error in /search endpoint:', error); res.status(500).json({ error: 'An internal server error occurred.' }); }
 });
 
 app.get('/stream/:infoHash', (req, res) => {
     if (engine) {
-        console.log('[Backend] New stream requested, destroying previous engine...');
+        console.log('[Backend] Destroying previous engine...');
         engine.destroy();
         engine = null;
     }
+    isReady = false; // Reset the ready flag
     const { infoHash } = req.params;
     if (!infoHash) return res.status(400).send('Info hash is required.');
-
     const magnetLink = `magnet:?xt=urn:btih:${infoHash}`;
-    console.log(`[Backend] Starting stream for info hash: ${infoHash}`);
-
-    // --- DEFINITIVE FIX: Tell peerflix to use our dedicated temp folder ---
+    console.log(`[Backend] Starting stream for: ${infoHash}`);
     engine = peerflix(magnetLink, { uploads: 0, path: DOWNLOAD_PATH });
-
-    engine.on('ready', () => { console.log('[Backend] Peerflix engine is ready.'); });
+    engine.on('ready', () => {
+        isReady = true; // --- NEW: Set the flag to true when ready ---
+        console.log('[Backend] Peerflix engine is READY.');
+        res.json({ status: 'ready' }); // --- NEW: Send a confirmation ---
+    });
     engine.on('error', (err) => { console.error(`[Backend] Peerflix engine error: ${err.message}`); });
-
-    res.json({ message: 'Stream engine initiated.' });
 });
 
 app.listen(BACKEND_PORT, '0.0.0.0', () => { console.log(`[Backend] Control server running on port ${BACKEND_PORT}.`); });
