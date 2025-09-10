@@ -9,15 +9,13 @@ const app = express();
 const BACKEND_PORT = 8000;
 const PEERFLIX_PORT = 8888;
 let engine = null;
-let isReady = false; // --- NEW: Add a flag to track if the stream is ready ---
 
 const DOWNLOAD_PATH = path.join(os.homedir(), 'Poxio', 'temp_downloads');
 
+// --- Video Streaming Server (No Change) ---
 const videoServer = express();
 videoServer.get('/', (req, res) => {
-    if (!engine || !engine.files.length || !isReady) { // Check the ready flag
-        return res.status(503).send('Stream not ready yet. Please try again in a moment.');
-    }
+    if (!engine || !engine.files.length) { return res.status(404).send('Stream not ready.'); }
     const file = engine.files.reduce((a, b) => (a.length > b.length ? a : b));
     const total = file.length;
     console.log(`[Media Server] Streaming file: ${file.name}`);
@@ -36,6 +34,7 @@ videoServer.get('/', (req, res) => {
 });
 videoServer.listen(PEERFLIX_PORT, '0.0.0.0', () => { console.log(`[Media Server] Video server is running on port ${PEERFLIX_PORT}.`); });
 
+// --- Control Server ---
 app.use(cors());
 app.use(express.json());
 
@@ -61,24 +60,33 @@ app.post('/search', async (req, res) => {
     } catch (error) { console.error('[Backend] Error in /search endpoint:', error); res.status(500).json({ error: 'An internal server error occurred.' }); }
 });
 
-app.get('/stream/:infoHash', (req, res) => {
+// --- DEFINITIVE FIX: New Long-Polling Endpoint ---
+app.get('/start-and-wait/:infoHash', (req, res) => {
     if (engine) {
         console.log('[Backend] Destroying previous engine...');
         engine.destroy();
         engine = null;
     }
-    isReady = false; // Reset the ready flag
     const { infoHash } = req.params;
-    if (!infoHash) return res.status(400).send('Info hash is required.');
+    if (!infoHash) return res.status(400).json({ error: 'Info hash is required.' });
+
     const magnetLink = `magnet:?xt=urn:btih:${infoHash}`;
     console.log(`[Backend] Starting stream for: ${infoHash}`);
     engine = peerflix(magnetLink, { uploads: 0, path: DOWNLOAD_PATH });
+
+    // The key change: The response is now sent INSIDE the 'ready' event listener.
+    // This makes the addon wait until the stream is actually prepared.
     engine.on('ready', () => {
-        isReady = true; // --- NEW: Set the flag to true when ready ---
-        console.log('[Backend] Peerflix engine is READY.');
-        res.json({ status: 'ready' }); // --- NEW: Send a confirmation ---
+        console.log('[Backend] Peerflix engine is READY. Sending confirmation.');
+        res.json({ status: 'ready' });
     });
-    engine.on('error', (err) => { console.error(`[Backend] Peerflix engine error: ${err.message}`); });
+
+    engine.on('error', (err) => {
+        console.error(`[Backend] Peerflix engine error: ${err.message}`);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Peerflix engine failed to start.' });
+        }
+    });
 });
 
 app.listen(BACKEND_PORT, '0.0.0.0', () => { console.log(`[Backend] Control server running on port ${BACKEND_PORT}.`); });
