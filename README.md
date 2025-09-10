@@ -8,6 +8,8 @@ Features
  * Zero Configuration: No need for static IPs, port forwarding, or manual Cloudflare dashboard setup.
 Easy Installation (for Android/Termux)
 This entire server can be set up by pasting one single command into Termux. It will automatically install the Ubuntu environment, clone this repository, and run the installer.
+
+
 pkg update -y && pkg install proot-distro git -y && proot-distro install ubuntu && proot-distro login ubuntu -- bash -c "apt-get update -y && apt-get install git -y && git clone [https://github.com/Boxytd/Poxio.git](https://github.com/Boxytd/Poxio.git) && cd Poxio && chmod +x install.sh && ./install.sh"
 
 How to Run
