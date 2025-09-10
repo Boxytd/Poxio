@@ -1,0 +1,14 @@
+{
+  "name": "boxy-peerflix-server",
+  "version": "1.0.0",
+  "description": "A local Stremio server for streaming torrents.",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "stremio-addon-sdk": "^1.6.10",
+    "node-fetch": "^2.7.0",
+    "peerflix": "github:mafintosh/peerflix",
+    "path": "^0.12.7"
+  }
+}
